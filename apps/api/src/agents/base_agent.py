@@ -13,10 +13,10 @@ from typing import (
     get_args,
 )
 
-from prisma.models import Threads
+from prisma.models import processed_pdfs, threads
 from pydantic import BaseModel
 
-from src.db.prisma import prisma
+from src.lib.prisma import prisma
 from src.logger import logger
 from src.models.messages import Message, TextContent
 from src.services.easylog_backend.backend_service import BackendService
@@ -29,12 +29,12 @@ class BaseAgent(Generic[TConfig]):
 
     thread_id: str
     _backend: BackendService | None = None
-    _thread: Threads | None = None
+    _thread: threads | None = None
     _raw_config: dict[str, Any] = {}
 
     _type_T: Any
 
-    def __init__(self, thread_id: str, backend: BackendService | None = None, **kwargs):
+    def __init__(self, thread_id: str, backend: BackendService | None = None, **kwargs: Any):
         self.thread_id = thread_id
         self._backend = backend
         self._raw_config = kwargs
@@ -104,6 +104,11 @@ class BaseAgent(Generic[TConfig]):
 
         prisma.threads.update(where={"id": self.thread_id}, data={"metadata": json.dumps(metadata)})
 
+    def get_knowledge(self) -> list[processed_pdfs]:
+        return prisma.processed_pdfs.find_many(
+            include={"object": True},
+        )
+
     @property
     def backend(self) -> BackendService:
         if self._backend is None:
@@ -121,7 +126,7 @@ class BaseAgent(Generic[TConfig]):
     def logger(self) -> logging.Logger:
         return logger
 
-    def _get_thread(self) -> Threads:
+    def _get_thread(self) -> threads:
         """Get the thread for the agent."""
 
         if self._thread is None:
@@ -129,11 +134,11 @@ class BaseAgent(Generic[TConfig]):
 
         return self._thread
 
-    async def _sync_to_async_generator(self, sync_gen: Generator):
+    async def _sync_to_async_generator(self, sync_gen: Generator) -> AsyncGenerator:
         for item in sync_gen:
             yield item
 
-    def _get_config(self, **kwargs) -> TConfig:
+    def _get_config(self, **kwargs: Any) -> TConfig:
         """Parse kwargs into the config type specified by the child class"""
         # Get the generic parameters using typing.get_args
         # Get the actual config type from the class's generic parameters

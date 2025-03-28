@@ -286,7 +286,7 @@ class AnthropicEasylogAgent(AnthropicAgent[AnthropicEasylogAgentConfig]):
 
         async def tool_generate_monthly_report(month: int, year: int):
             """
-            Genereert een maandrapport voor de opgegeven maand en jaar.
+            Genereert een maandrapport voor de opgegeven maand en jaar in 2025.
             """
             try:
                 self.logger.info(f"Generating monthly report for {month}/{year}")

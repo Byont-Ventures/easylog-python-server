@@ -70,6 +70,8 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
             "tool_clear_memories",
             "tool_get_daily_steps",
             "tool_get_steps_history",
+            "tool_receive_health_data",
+            "tool_get_health_summary",
         ]
 
         self.available_tools = all_tools
@@ -674,6 +676,73 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
                     "steps_data": {}
                 })
 
+        async def tool_receive_health_data(data: dict) -> str:
+            """
+            Process health data from the Flutter app.
+            
+            Args:
+                data: Dictionary with date, steps, or date_range and steps_data
+            
+            Returns:
+                Confirmation message
+            """
+            try:
+                # Get existing health data from metadata
+                health_data = self.get_metadata("health_data", default={})
+                
+                # Process single day data
+                if "date" in data and "steps" in data:
+                    date = data["date"]
+                    steps = data["steps"]
+                    health_data[date] = steps
+                    self.logger.info(f"Received step data for {date}: {steps} steps")
+                
+                # Process date range data
+                elif "date_range" in data and "steps_data" in data:
+                    steps_data = data["steps_data"]
+                    for date, steps in steps_data.items():
+                        health_data[date] = steps
+                
+                # Store updated data
+                self.set_metadata("health_data", health_data)
+                return "Health data received and stored successfully"
+            
+            except Exception as e:
+                self.logger.error(f"Error processing health data: {str(e)}")
+                return f"Error processing health data: {str(e)}"
+
+        async def tool_get_health_summary() -> str:
+            """
+            Generate a summary of collected health data.
+            
+            Returns:
+                JSON string with health statistics
+            """
+            try:
+                health_data = self.get_metadata("health_data", default={})
+                
+                if not health_data:
+                    return json.dumps({"status": "error", "message": "No health data available"})
+                
+                # Convert to format for analysis
+                dates = list(health_data.keys())
+                steps = list(health_data.values())
+                
+                summary = {
+                    "total_days": len(health_data),
+                    "total_steps": sum(steps),
+                    "average_steps": round(sum(steps) / len(steps), 2),
+                    "max_steps": max(steps),
+                    "min_steps": min(steps),
+                    "latest_date": max(dates)
+                }
+                
+                return json.dumps({"status": "success", "summary": summary})
+            
+            except Exception as e:
+                self.logger.error(f"Error generating health summary: {str(e)}")
+                return json.dumps({"status": "error", "message": str(e)})
+
         tools = [
             tool_store_memory,
             tool_search_pdf,
@@ -681,6 +750,8 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
             tool_clear_memories,
             tool_get_daily_steps,
             tool_get_steps_history,
+            tool_receive_health_data,
+            tool_get_health_summary,
         ]
 
         # Print all tools for debugging
@@ -698,6 +769,8 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
                 "tool_clear_memories",
                 "tool_get_daily_steps",
                 "tool_get_steps_history",
+                "tool_receive_health_data",
+                "tool_get_health_summary",
             ]:
                 anthropic_tools.append(function_to_anthropic_tool(tool))
                 self.logger.info(f"Added tool to Anthropic tools: {tool.__name__}")
@@ -751,15 +824,8 @@ Your role is to provide personalized guidance, encouragement, and advice to help
 - tool_load_image: Loads images from PDFs to illustrate points
 - tool_get_daily_steps: Gets step count data from the user's iPhone HealthKit
 - tool_get_steps_history: Retrieves step count history over a specified number of days
-
-### Using the tool_search_pdf
-You can use the tool_search_pdf to search for information in PDF documents stored in the knowledge base. Use this tool when a user asks about information that might be in a handbook, report, or other PDF document.
-
-### Using the tool_get_daily_steps
-You can use the tool_get_daily_steps to fetch the user's step count data from their iPhone's HealthKit integration. This can help you provide personalized activity recommendations based on their actual movement patterns.
-
-### Using the tool_get_steps_history
-This tool retrieves step count history for a specified number of days (default is 7). Use this to analyze trends in the user's activity level and provide insights on their progress.
+- tool_receive_health_data: Processes step data from the Flutter app
+- tool_get_health_summary: Provides a summary of health data
 
 ### Core memories
 Core memories are important information you should remember about a user. You collect these yourself with the "store_memory" tool. For example, if the user tells you their name, has experienced an important event, or has provided important information, you should store it in the core memories.
@@ -783,7 +849,7 @@ Your current core memories are:
 - Encourage regular checkups with healthcare providers
 - Remind about the importance of avoiding respiratory irritants
 - Suggest ways to track symptoms and recognize warning signs
-            """,
+""",
             messages=message_history,
             tools=anthropic_tools,
             stream=True,

@@ -35,7 +35,7 @@ class HealthData(TypedDict):
 class AnthropicHealthAgentConfig(BaseModel):
     max_history_entries: int = Field(
         default=50,
-        description="Maximum number of entries to fetch from the database for health history",
+        description="Maximum number of entries to fetch from the database for health history!",
     )
     debug_mode: bool = Field(
         default=True, description="Enable debug mode with additional logging"

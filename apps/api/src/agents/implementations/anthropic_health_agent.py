@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator
-from typing import TypedDict
+from typing import TypedDict, Optional
 
 # Third-party imports
 from dotenv import load_dotenv
@@ -68,6 +68,8 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
             "tool_search_pdf",
             "tool_load_image",
             "tool_clear_memories",
+            "tool_get_daily_steps",
+            "tool_get_steps_history",
         ]
 
         self.available_tools = all_tools
@@ -474,11 +476,208 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
                 self.logger.error(f"[IMAGE] Error during processing: {str(e)}")
                 raise e
 
+        async def tool_get_daily_steps(date: Optional[str] = None) -> str:
+            """
+            Get daily step count data from the iPhone's HealthKit through the Flutter app.
+            
+            Args:
+                date (str, optional): The date for which to retrieve step data in format 'YYYY-MM-DD'. 
+                                     If not provided, defaults to today's date.
+            
+            Returns:
+                str: JSON string containing step count data for the requested date
+            """
+            import datetime
+            import requests
+            import json
+
+            # Use today's date if none provided
+            if date is None:
+                date = datetime.datetime.now().strftime("%Y-%m-%d")
+            
+            self.logger.info(f"[HEALTH] Requesting step data for date: {date}")
+            
+            try:
+                # Query the local step data storage first
+                step_data = self.get_metadata("step_data", default={})
+                
+                if date in step_data:
+                    self.logger.info(f"[HEALTH] Found cached step data for {date}: {step_data[date]} steps")
+                    return json.dumps({
+                        "date": date,
+                        "steps": step_data[date],
+                        "source": "cached"
+                    })
+                
+                # No cached data, try to request from the Flask API
+                api_url = "http://localhost:5000/health_data"  # Adjust URL as needed
+                
+                try:
+                    response = requests.get(f"{api_url}/daily?date={date}", timeout=5)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        # Cache the result for future use
+                        if "steps" in data:
+                            step_data[date] = data["steps"]
+                            self.set_metadata("step_data", step_data)
+                            
+                            self.logger.info(f"[HEALTH] Retrieved step data for {date}: {data['steps']} steps")
+                            return json.dumps(data)
+                    else:
+                        self.logger.warning(f"[HEALTH] API returned error: {response.status_code}")
+                        return json.dumps({
+                            "date": date,
+                            "error": f"API error: {response.status_code}",
+                            "steps": 0
+                        })
+                        
+                except requests.exceptions.RequestException as e:
+                    self.logger.warning(f"[HEALTH] Failed to connect to API: {str(e)}")
+                    # Continue with the fall-through to provide a friendly response
+                
+                # If we get here, we couldn't get data from cache or API
+                self.logger.warning(f"[HEALTH] No step data available for {date}")
+                return json.dumps({
+                    "date": date,
+                    "message": "No step data available for this date. Please sync your device.",
+                    "steps": 0
+                })
+                
+            except Exception as e:
+                self.logger.error(f"[HEALTH] Error retrieving step data: {str(e)}")
+                return json.dumps({
+                    "date": date,
+                    "error": str(e),
+                    "steps": 0
+                })
+
+        async def tool_get_steps_history(days: Optional[int] = 7) -> str:
+            """
+            Retrieve step count history for a specified number of days from HealthKit.
+            
+            Args:
+                days (int, optional): Number of days of history to retrieve. Defaults to 7.
+            
+            Returns:
+                str: JSON string containing step count history data
+            """
+            import datetime
+            import requests
+            import json
+            
+            self.logger.info(f"[HEALTH] Requesting step history for last {days} days")
+            
+            try:
+                # Calculate date range
+                end_date = datetime.datetime.now()
+                start_date = end_date - datetime.timedelta(days=days)
+                
+                # Format dates for API
+                end_date_str = end_date.strftime("%Y-%m-%d")
+                start_date_str = start_date.strftime("%Y-%m-%d")
+                
+                # Check if we have cached data first
+                step_data = self.get_metadata("step_data", default={})
+                
+                # Try to get data from the API
+                api_url = "http://localhost:5000/health_data"
+                
+                try:
+                    response = requests.get(
+                        f"{api_url}/range?start={start_date_str}&end={end_date_str}", 
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        # Cache the results
+                        if "steps_data" in data:
+                            for date, steps in data["steps_data"].items():
+                                step_data[date] = steps
+                            self.set_metadata("step_data", step_data)
+                            
+                            self.logger.info(f"[HEALTH] Retrieved step history for {len(data['steps_data'])} days")
+                            
+                            # Calculate some statistics
+                            steps_values = list(data["steps_data"].values())
+                            if steps_values:
+                                data["stats"] = {
+                                    "average": sum(steps_values) / len(steps_values),
+                                    "max": max(steps_values),
+                                    "min": min(steps_values),
+                                    "total": sum(steps_values)
+                                }
+                            
+                            return json.dumps(data)
+                    else:
+                        self.logger.warning(f"[HEALTH] API returned error: {response.status_code}")
+                        
+                except requests.exceptions.RequestException as e:
+                    self.logger.warning(f"[HEALTH] Failed to connect to API: {str(e)}")
+                
+                # If API failed, try to use cached data
+                date_range = []
+                current_date = start_date
+                while current_date <= end_date:
+                    date_range.append(current_date.strftime("%Y-%m-%d"))
+                    current_date += datetime.timedelta(days=1)
+                
+                # Get available data from cache
+                available_data = {}
+                for date in date_range:
+                    if date in step_data:
+                        available_data[date] = step_data[date]
+                
+                if available_data:
+                    self.logger.info(f"[HEALTH] Using cached data for {len(available_data)} days")
+                    
+                    # Calculate statistics
+                    steps_values = list(available_data.values())
+                    stats = {
+                        "average": sum(steps_values) / len(steps_values),
+                        "max": max(steps_values),
+                        "min": min(steps_values),
+                        "total": sum(steps_values),
+                        "source": "cached"
+                    }
+                    
+                    return json.dumps({
+                        "date_range": {
+                            "start": start_date_str,
+                            "end": end_date_str
+                        },
+                        "steps_data": available_data,
+                        "stats": stats
+                    })
+                
+                # No data available
+                self.logger.warning(f"[HEALTH] No step history available")
+                return json.dumps({
+                    "date_range": {
+                        "start": start_date_str,
+                        "end": end_date_str
+                    },
+                    "message": "No step history available. Please sync your device.",
+                    "steps_data": {}
+                })
+                
+            except Exception as e:
+                self.logger.error(f"[HEALTH] Error retrieving step history: {str(e)}")
+                return json.dumps({
+                    "error": str(e),
+                    "steps_data": {}
+                })
+
         tools = [
             tool_store_memory,
             tool_search_pdf,
             tool_load_image,
             tool_clear_memories,
+            tool_get_daily_steps,
+            tool_get_steps_history,
         ]
 
         # Print all tools for debugging
@@ -494,6 +693,8 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
                 "tool_search_pdf",
                 "tool_load_image",
                 "tool_clear_memories",
+                "tool_get_daily_steps",
+                "tool_get_steps_history",
             ]:
                 anthropic_tools.append(function_to_anthropic_tool(tool))
                 self.logger.info(f"Added tool to Anthropic tools: {tool.__name__}")
@@ -545,9 +746,17 @@ Your role is to provide personalized guidance, encouragement, and advice to help
 - tool_clear_memories: Clears all stored memories
 - tool_search_pdf: Searches a PDF in the knowledge base
 - tool_load_image: Loads images from PDFs to illustrate points
+- tool_get_daily_steps: Gets step count data from the user's iPhone HealthKit
+- tool_get_steps_history: Retrieves step count history over a specified number of days
 
 ### Using the tool_search_pdf
 You can use the tool_search_pdf to search for information in PDF documents stored in the knowledge base. Use this tool when a user asks about information that might be in a handbook, report, or other PDF document.
+
+### Using the tool_get_daily_steps
+You can use the tool_get_daily_steps to fetch the user's step count data from their iPhone's HealthKit integration. This can help you provide personalized activity recommendations based on their actual movement patterns.
+
+### Using the tool_get_steps_history
+This tool retrieves step count history for a specified number of days (default is 7). Use this to analyze trends in the user's activity level and provide insights on their progress.
 
 ### Core memories
 Core memories are important information you should remember about a user. You collect these yourself with the "store_memory" tool. For example, if the user tells you their name, has experienced an important event, or has provided important information, you should store it in the core memories.

@@ -567,12 +567,15 @@ class AnthropicHealthAgent(AnthropicAgent[AnthropicHealthAgentConfig]):
             import requests
             import json
             
-            self.logger.info(f"[HEALTH] Requesting step history for last {days} days")
+            # Ensure days has a valid value
+            days_value = 7 if days is None else days
+            
+            self.logger.info(f"[HEALTH] Requesting step history for last {days_value} days")
             
             try:
                 # Calculate date range
                 end_date = datetime.datetime.now()
-                start_date = end_date - datetime.timedelta(days=days)
+                start_date = end_date - datetime.timedelta(days=days_value)
                 
                 # Format dates for API
                 end_date_str = end_date.strftime("%Y-%m-%d")
